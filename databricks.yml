@@ -1,0 +1,14 @@
+bundle:
+  name: workforce-data-pipeline
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+
+    workspace:
+      host: https://dbc-051806cb-1b97.cloud.databricks.com
+

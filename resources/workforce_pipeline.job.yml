@@ -1,0 +1,76 @@
+resources:
+  jobs:
+    workforce_daily_pipeline:
+      name: workforce-daily-pipeline-${bundle.target}
+
+      description: >
+        Ingests the latest workforce snapshot folder, runs data-quality checks,
+        loads Silver SCD tables, and refreshes the Gold Power BI model.
+
+      max_concurrent_runs: 1
+
+      queue:
+        enabled: true
+
+      schedule:
+        quartz_cron_expression: "0 0 8 * * ?"
+        timezone_id: "Europe/London"
+        pause_status: PAUSED
+
+      tasks:
+        # 1. Copy the latest GitHub folder into the Bronze Volume.
+        - task_key: ingest_latest_github_snapshot
+          notebook_task:
+            notebook_path: ../src/ingestion/ingestion_st.ipynb
+            base_parameters:
+              process_latest_only: "true"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
+        # 2. Read the Bronze Volume CSV files and append to Bronze Delta tables.
+        - task_key: bronze_volume_to_delta
+          depends_on:
+            - task_key: ingest_latest_github_snapshot
+          notebook_task:
+            notebook_path: ../src/bronze/ds2b.ipynb
+            base_parameters:
+              process_latest_only: "true"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
+        # 3. Run DQ checks and load dimensions using SCD2.
+        - task_key: silver_dimensions_scd2
+          depends_on:
+            - task_key: bronze_volume_to_delta
+          notebook_task:
+            notebook_path: ../src/silver/dim_b2s.ipynb
+            base_parameters:
+              process_latest_only: "true"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
+        # 4. Run fact DQ checks and load current fact state using SCD1.
+        # This waits for dimensions because fact DQ validates dimension keys.
+        - task_key: silver_facts_scd1
+          depends_on:
+            - task_key: silver_dimensions_scd2
+          notebook_task:
+            notebook_path: ../src/silver/fact_b2s.ipynb
+            base_parameters:
+              process_latest_only: "true"
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
+        # 5. Build Gold dimensions, facts, durations, and DimDate for Power BI.
+        - task_key: gold_powerbi_model
+          depends_on:
+            - task_key: silver_facts_scd1
+          notebook_task:
+            notebook_path: ../src/gold/s2g.ipynb
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 300000
